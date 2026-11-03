@@ -1,0 +1,32 @@
+{
+  "name": "grocery-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "node e2e/two-devices.mjs"
+  },
+  "dependencies": {
+    "@effect/platform-browser": "4.1.2",
+    "@foldkit/ui": "0.170.0",
+    "@tanstack/db": "1.0.0-rc.1.2",
+    "@tanstack/offline-transactions": "1.2.0",
+    "effect": "4.1.2",
+    "foldkit": "0.170.0",
+    "grocery-server": "*"
+  },
+  "devDependencies": {
+    "@foldkit/devtools": "0.170.0",
+    "@foldkit/vite-plugin": "0.29.0",
+    "@tailwindcss/vite": "4.3.4",
+    "happy-dom": "21.0.4",
+    "tailwindcss": "4.3.4",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.1.0",
+    "playwright": "1.56.1"
+  }
+}
