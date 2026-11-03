@@ -40,12 +40,12 @@ The collection is the one copy of the list on the device. The Model holds what t
 
 ```ts
 GroceryItemRow = Schema.Struct({ groceryItemId: GroceryItemId, name: GroceryItemName, checked: Schema.Boolean, isSaving: Schema.Boolean })
-GroceryListSyncStatus = defineTaggedUnion({ Connecting: {}, Live: {}, Offline: {} })
+SyncedListStatus (src/lib/synced-list.ts): Connecting | Live | Offline
 RenameDraft = Schema.Struct({ groceryItemId: GroceryItemId, draftName: Schema.String })
 
 Model = Schema.Struct({
   groceryItems: Schema.Array(GroceryItemRow),   // listed only: unchecked first, then checked, each by addedAt
-  syncStatus: GroceryListSyncStatus,
+  syncStatus: SyncedListStatus,
   newItemName: Schema.String,
   renameDraft: Schema.Option(RenameDraft),
   undoneWrite: Schema.Option(Schema.String),    // why the last write was undone, until the next write or dismiss
@@ -83,68 +83,62 @@ Cases (Story tests, no DOM)
 `ClickedCheckbox` picks check or uncheck from the row the shopper sees, so a tap means what it showed. Two shoppers tapping the same item both end up with it checked (rule 4).
 Offline, `isPersisted` waits until the outbox sends: the Command stays open, and the row stays `isSaving`.
 
-## GroceryStore (`src/grocery-store.ts`)
-Owns: the collection, the outbox, and one offline action per use case. App-wide, so a Foldkit `resources` Layer, built once at start.
+## SyncedList (`src/lib/synced-list.ts`)
+A synced, offline-capable list of one resource, over a server that answers "the list after a seq". Knows nothing of groceries.
 
 ```ts
-class GroceryStore extends Context.Service<GroceryStore, {
-  groceryItems: Collection<GroceryItemView, GroceryItemId>
-  syncStatus: SubscriptionRef<GroceryListSyncStatus>
-  addGroceryItem(args: { groceryItemId; name }): Transaction
-  renameGroceryItem(args: { groceryItemId; name }): Transaction
-  checkGroceryItem(args: { groceryItemId }): Transaction
-  uncheckGroceryItem(args: { groceryItemId }): Transaction
-  removeGroceryItem(args: { groceryItemId }): Transaction
-}>
+SyncedList.make<Row, View, Intents>({
+  name,                         // collection id, localStorage key, IndexedDB outbox, leader lock
+  row, key,                     // the JSON-safe row schema and its key
+  viewKey, rowOf,               // a server view → its key, and its row (none: removed)
+  live: (afterSeq) => Stream<{ items: View[], lastSeq }>,
+  intents: { [intent]: { args: Schema, optimistic(rows, args), send(args) → { seq } } },
+}) → { rows: Collection<Row>, status: SubscriptionRef<Connecting | Live | Offline>, send: { [intent](args) → Transaction } }
 ```
+
+The server contract:
 
 ```text
-GroceryStore.layer
-├─ HttpApiClient.make(GroceryApi, { baseUrl: "/api" })
-├─ createCollection({ id: "grocery-items", getKey: groceryItemId, sync })
-├─ startOfflineExecutor({ collections, mutationFns: one per use case }) ; waitForInit
-└─ executor.createOfflineAction({ mutationFnName, onMutate }) × 5
+GET  live?afterSeq=N    SSE of { items, lastSeq }: the items written after N, then again after each write, and every 10 s
+every write             answers the written item with its seq; safe to send twice
 ```
 
-Sync, in the collection's `sync`:
+Sync:
 
 ```text
-start       read the kept snapshot { items, lastSeq } from localStorage → write them, markReady
-follow      client.groceryItems.streamGroceryItems({ afterSeq: lastSeq }), decoded by the client
-            each batch: begin; Removed → delete, kept → update, else insert; commit; lastSeq = batch.lastSeq; keep the snapshot
-            the first batch with nothing kept → markReady
-            the stream ends or fails → Offline, retry with backoff from the newest lastSeq
-seq waiters awaitGroceryItemSeq(seq) resolves once lastSeq ≥ seq
+start                          the kept { rows, lastSeq } from localStorage → write them, markReady
+follow                         live(lastSeq); each batch: begin; removed → delete, kept → update, else insert; commit; keep the snapshot
+a connection from seq 0        its first batch is the whole list: begin({ snapshot: true }) replaces every synced row
+a batch with a lower lastSeq   the server forgot the list: lastSeq = 0, reconnect, so the whole list replaces it
+25 seconds without a batch     the connection is dead: reconnect
+the browser's offline event    drop the connection at once: Offline, reconnect every 2 seconds
 ```
 
-A kept snapshot is what makes the list open offline after a reload; the outbox alone keeps only the writes.
-
-Writes, one `mutationFn` per use case. Its name is the intent; the mutation's key is the item:
+Writes: `send[intent](args)` is one offline transaction. It applies `optimistic` at once and stores `args`, encoded by the intent's schema, in the outbox. Replayed after a reload, its `mutationFn` decodes them and calls `send`:
 
 ```text
-addGroceryItem      onMutate: insert { groceryItemId, name, status: Unchecked, addedAt: now, seq: 0 }
-                    mutationFn: client.groceryItems.addGroceryItem({ payload: { groceryItemId, name } })
-renameGroceryItem   onMutate: update name                      mutationFn: renameGroceryItem
-checkGroceryItem    onMutate: update status Checked            mutationFn: checkGroceryItem
-uncheckGroceryItem  onMutate: update status Unchecked          mutationFn: uncheckGroceryItem
-removeGroceryItem   onMutate: delete                           mutationFn: removeGroceryItem
-
-every mutationFn    answer → awaitGroceryItemSeq(answer.seq), so the optimistic row hands over to the synced one in place
-                    an HTTP error the API declares (404, 409, 400) → NonRetriableError with its message: the outbox drops it, the row rolls back
-                    a network error → thrown as is: the outbox retries with backoff
+answer               wait until the live list reaches the answer's seq, so the optimistic row hands over to the synced one in place
+a declared 4xx       NonRetriableError with its message: the outbox drops it, the row rolls back
+a network error, 5xx thrown as is: the outbox retries with backoff
 ```
 
-Every endpoint is safe to send twice (grocery item spec, GroceryItemController), so a retry after a lost answer changes nothing, and no idempotency key goes to the server.
+Every endpoint is safe to send twice (grocery item spec, GroceryItemController), so no idempotency key goes to the server.
 Rejected: the collection's generic `onUpdate`: it gives a diff of fields, and the client would guess the intent from it.
 Rejected: one action that sends the whole row: the server takes intents, not rows.
 
-The collection holds `GroceryItemRecord`, a JSON-safe copy of `GroceryItemView` (ISO strings for instants, no `Removed`): the outbox writes mutations to IndexedDB as JSON, and in Effect 4 a `DateTimeUtc`'s encoded side is still a `DateTime`. `groceryItemRecordFromView` names every field.
+## GroceryStore (`src/grocery-store.ts`)
+`SyncedList.make` for grocery items, as a Foldkit `resources` Layer, built once at start.
 
 ```text
-a connection from seq 0        its first batch is the whole list: begin({ snapshot: true }) replaces every synced row
-a batch with a lower lastSeq   the server forgot the list: lastSeq = 0, reconnect, so the whole list replaces it
-25 seconds without a batch     the connection is dead (the server's heartbeat is every 10): reconnect
-the browser's offline event    drop the connection at once: Offline shows, and it reconnects every 2 seconds
+row          GroceryItemRecord: a JSON-safe copy of GroceryItemView (ISO strings for instants, no Removed);
+             in Effect 4 a DateTimeUtc's encoded side is still a DateTime, and the outbox stores JSON
+live         client.groceryItems.streamGroceryItems({ afterSeq })
+intents      addGroceryItem      optimistic: insert, Unchecked, addedAt now
+             renameGroceryItem   optimistic: update name
+             checkGroceryItem    optimistic: status Checked
+             uncheckGroceryItem  optimistic: status Unchecked
+             removeGroceryItem   optimistic: delete
+             each sends its endpoint on GroceryApi
 ```
 
 Cases (e2e: two browser contexts, `client/e2e/two-devices.mjs`)
@@ -153,13 +147,15 @@ Cases (e2e: two browser contexts, `client/e2e/two-devices.mjs`)
   offline: add Bread, check Free-range eggs      → both rows show saving; the other device sees neither
   reload with the server unreachable             → the kept list and both saving rows come back
   back online                                    → both writes reach the other device
+  a removal while the device is offline          → gone once it is back
 
 ## Subscriptions (`src/main.ts`)
 
 ```text
-groceryItems   GroceryStore.groceryItems.subscribeChanges, with its current rows first
+groceryItems   GroceryStore.rows.subscribeChanges({ includeInitialState: false }), then its current rows;
+               without the option a subscription only hears deletes of rows it was sent, so a removal of a kept row is lost
                → ChangedGroceryItems { groceryItems: listed rows, ordered }
-syncStatus     GroceryStore.syncStatus.changes → ChangedSyncStatus
+syncStatus     GroceryStore.status.changes → ChangedSyncStatus
 ```
 
 Both run for the app's lifetime: their dependencies are constant.
@@ -186,7 +182,8 @@ A reload with the device offline needs a service worker to load the page at all;
 + ├─ index.html
 + ├─ src/entry.ts              Runtime.makeApplication({ Model, init, update, view, subscriptions, resources: GroceryStore.layer })
 + ├─ src/main.ts               Model, Messages, update, Commands, subscriptions, view
-+ ├─ src/grocery-store.ts      GroceryStore
++ ├─ src/lib/synced-list.ts    SyncedList
++ ├─ src/grocery-store.ts      GroceryStore: SyncedList.make for grocery items
 + ├─ src/main.story.test.ts    the update Cases
 + └─ e2e/two-devices.mjs       the sync Cases, against both dev servers
 ```
