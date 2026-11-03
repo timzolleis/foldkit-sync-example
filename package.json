@@ -1,5 +1,5 @@
 {
-  "name": "foldkit-grocery",
+  "name": "foldkit-sync-example",
   "private": true,
   "type": "module",
   "workspaces": [
@@ -12,5 +12,8 @@
     "typecheck": "npm run typecheck -w server && npm run typecheck -w client",
     "test": "npm test -w server && npm test -w client",
     "e2e": "npm run e2e -w client"
+  },
+  "engines": {
+    "node": ">=24.2"
   }
 }
