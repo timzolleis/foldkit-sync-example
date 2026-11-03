@@ -6,7 +6,8 @@ import { defineMessageUnion } from "foldkit/message"
 import { modifyFields } from "foldkit/struct"
 import { generateGroceryItemId, GroceryItemId } from "grocery-server/grocery-item/domain/grocery-item-id.ts"
 import { GroceryItemName } from "grocery-server/grocery-item/domain/grocery-item-name.ts"
-import { type GroceryItemRecord, GroceryListSyncStatus, GroceryStore } from "./grocery-store.ts"
+import { type GroceryItemRecord, GroceryStore } from "./grocery-store.ts"
+import { SyncedListStatus } from "./lib/synced-list.ts"
 
 // MODEL
 
@@ -23,7 +24,7 @@ export type RenameDraft = typeof RenameDraft.Type
 
 export const Model = Schema.Struct({
   groceryItems: Schema.Array(GroceryItemRow),
-  syncStatus: GroceryListSyncStatus,
+  syncStatus: SyncedListStatus,
   newItemName: Schema.String,
   renameDraft: Schema.Option(RenameDraft),
   undoneWrite: Schema.Option(Schema.String),
@@ -43,7 +44,7 @@ export const Message = defineMessageUnion({
   ClickedRemove: { groceryItemId: GroceryItemId },
   DismissedUndoneWrite: {},
   ChangedGroceryItems: { groceryItems: Schema.Array(GroceryItemRow) },
-  ChangedSyncStatus: { syncStatus: GroceryListSyncStatus },
+  ChangedSyncStatus: { syncStatus: SyncedListStatus },
   ConfirmedGroceryItemWrite: {},
   UndidGroceryItemWrite: { reason: Schema.String },
 })
@@ -71,7 +72,7 @@ export const AddGroceryItem = Command.define("AddGroceryItem", {
   execute: ({ name }) =>
     Effect.gen(function* () {
       const groceryStore = yield* GroceryStore
-      return yield* settledGroceryItemWrite(groceryStore.addGroceryItem({ groceryItemId: generateGroceryItemId(), name }))
+      return yield* settledGroceryItemWrite(groceryStore.send.addGroceryItem({ groceryItemId: generateGroceryItemId(), name }))
     }),
 })
 
@@ -81,7 +82,7 @@ export const RenameGroceryItem = Command.define("RenameGroceryItem", {
   execute: ({ groceryItemId, name }) =>
     Effect.gen(function* () {
       const groceryStore = yield* GroceryStore
-      return yield* settledGroceryItemWrite(groceryStore.renameGroceryItem({ groceryItemId, name }))
+      return yield* settledGroceryItemWrite(groceryStore.send.renameGroceryItem({ groceryItemId, name }))
     }),
 })
 
@@ -91,7 +92,7 @@ export const CheckGroceryItem = Command.define("CheckGroceryItem", {
   execute: ({ groceryItemId }) =>
     Effect.gen(function* () {
       const groceryStore = yield* GroceryStore
-      return yield* settledGroceryItemWrite(groceryStore.checkGroceryItem({ groceryItemId }))
+      return yield* settledGroceryItemWrite(groceryStore.send.checkGroceryItem({ groceryItemId }))
     }),
 })
 
@@ -101,7 +102,7 @@ export const UncheckGroceryItem = Command.define("UncheckGroceryItem", {
   execute: ({ groceryItemId }) =>
     Effect.gen(function* () {
       const groceryStore = yield* GroceryStore
-      return yield* settledGroceryItemWrite(groceryStore.uncheckGroceryItem({ groceryItemId }))
+      return yield* settledGroceryItemWrite(groceryStore.send.uncheckGroceryItem({ groceryItemId }))
     }),
 })
 
@@ -111,7 +112,7 @@ export const RemoveGroceryItem = Command.define("RemoveGroceryItem", {
   execute: ({ groceryItemId }) =>
     Effect.gen(function* () {
       const groceryStore = yield* GroceryStore
-      return yield* settledGroceryItemWrite(groceryStore.removeGroceryItem({ groceryItemId }))
+      return yield* settledGroceryItemWrite(groceryStore.send.removeGroceryItem({ groceryItemId }))
     }),
 })
 
@@ -199,7 +200,7 @@ export const update = (model: Model, message: Message): UpdateReturn =>
 export const init: Runtime.ApplicationInit<Model, Message> = () => ({
   model: {
     groceryItems: [],
-    syncStatus: GroceryListSyncStatus.Connecting(),
+    syncStatus: SyncedListStatus.Connecting(),
     newItemName: "",
     renameDraft: Option.none(),
     undoneWrite: Option.none(),
@@ -215,7 +216,7 @@ const groceryItemRowOrder = Order.combine(
 
 const groceryItemRowsFromStore = (groceryStore: GroceryStore["Service"]): ReadonlyArray<GroceryItemRow> =>
   pipe(
-    groceryStore.groceryItems.toArray,
+    groceryStore.rows.toArray,
     Arr.sort(groceryItemRowOrder),
     Arr.map((groceryItem) => ({
       groceryItemId: GroceryItemId.make(groceryItem.groceryItemId),
@@ -231,7 +232,7 @@ const changedGroceryItemsFromStore = (groceryStore: GroceryStore["Service"]) =>
       Effect.sync(() => {
         const offerGroceryItems = () =>
           Queue.offerUnsafe(queue, Message.ChangedGroceryItems({ groceryItems: groceryItemRowsFromStore(groceryStore) }))
-        const subscription = groceryStore.groceryItems.subscribeChanges(offerGroceryItems, { includeInitialState: false })
+        const subscription = groceryStore.rows.subscribeChanges(offerGroceryItems, { includeInitialState: false })
         offerGroceryItems()
         return subscription
       }),
@@ -254,7 +255,7 @@ export const subscriptions = Subscription.make<Model, Message, GroceryStore>()((
       dependenciesToStream: () =>
         Stream.unwrap(
           Effect.map(GroceryStore, (groceryStore) =>
-            SubscriptionRef.changes(groceryStore.syncStatus).pipe(
+            SubscriptionRef.changes(groceryStore.status).pipe(
               Stream.map((syncStatus) => Message.ChangedSyncStatus({ syncStatus })),
             ),
           ),
@@ -265,10 +266,10 @@ export const subscriptions = Subscription.make<Model, Message, GroceryStore>()((
 
 // VIEW
 
-const syncStatusView = (syncStatus: GroceryListSyncStatus, h: HtmlBuilder<Message>): Html =>
+const syncStatusView = (syncStatus: SyncedListStatus, h: HtmlBuilder<Message>): Html =>
   h.div(
     [h.Class("flex items-center gap-2 text-sm text-stone-500"), h.Role("status")],
-    GroceryListSyncStatus.match(syncStatus, {
+    SyncedListStatus.match(syncStatus, {
       Connecting: () => [h.span([h.Class("size-2 shrink-0 rounded-full bg-stone-300")], []), "Connecting…"],
       Live: () => [h.span([h.Class("size-2 shrink-0 rounded-full bg-emerald-500")], []), "Live"],
       Offline: () => [

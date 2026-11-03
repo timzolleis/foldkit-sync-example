@@ -4,7 +4,7 @@ import { modifyFields } from "foldkit/struct"
 import { generateGroceryItemId } from "grocery-server/grocery-item/domain/grocery-item-id.ts"
 import { GroceryItemName } from "grocery-server/grocery-item/domain/grocery-item-name.ts"
 import { describe, expect, test } from "vitest"
-import { GroceryListSyncStatus } from "./grocery-store.ts"
+import { SyncedListStatus } from "./lib/synced-list.ts"
 import {
   AddGroceryItem,
   CheckGroceryItem,
@@ -26,7 +26,7 @@ const eggs: GroceryItemRow = { ...milk, groceryItemId: generateGroceryItemId(), 
 
 const listModel: Model = {
   groceryItems: [milk, eggs],
-  syncStatus: GroceryListSyncStatus.Live(),
+  syncStatus: SyncedListStatus.Live(),
   newItemName: "",
   renameDraft: Option.none(),
   undoneWrite: Option.none(),
