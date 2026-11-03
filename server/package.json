@@ -1,0 +1,25 @@
+{
+  "name": "grocery-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.ts",
+    "start": "node src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "effect": "4.1.2",
+    "@effect/platform-node": "4.1.2",
+    "@paralleldrive/cuid2": "3.3.0"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/node": "^26",
+    "vitest": "5.1.0",
+    "@effect/vitest": "4.1.2"
+  },
+  "exports": {
+    "./*": "./src/*"
+  }
+}
