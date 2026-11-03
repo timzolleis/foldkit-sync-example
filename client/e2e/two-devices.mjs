@@ -88,5 +88,14 @@ await step("a removal shows on the other device", async () => {
   await sleep(800)
   assert.deepEqual(await rowsOf(anna), ["[x] Milk", "[x] Free-range eggs"])
 })
+await step("a removal made while a device is offline shows once it is back", async () => {
+  await annaDevice.setOffline(true)
+  await sleep(500)
+  await ben.click("button[aria-label='Remove Milk']")
+  await sleep(500)
+  await annaDevice.setOffline(false)
+  await sleep(4500)
+  assert.deepEqual(await rowsOf(anna), ["[x] Free-range eggs"])
+})
 
 await browser.close()
