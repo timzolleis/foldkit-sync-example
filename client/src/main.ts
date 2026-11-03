@@ -231,7 +231,7 @@ const changedGroceryItemsFromStore = (groceryStore: GroceryStore["Service"]) =>
       Effect.sync(() => {
         const offerGroceryItems = () =>
           Queue.offerUnsafe(queue, Message.ChangedGroceryItems({ groceryItems: groceryItemRowsFromStore(groceryStore) }))
-        const subscription = groceryStore.groceryItems.subscribeChanges(offerGroceryItems)
+        const subscription = groceryStore.groceryItems.subscribeChanges(offerGroceryItems, { includeInitialState: false })
         offerGroceryItems()
         return subscription
       }),
