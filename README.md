@@ -93,3 +93,7 @@ The e2e drives two separate browser profiles through the following:
 - The server is in memory, so a restart forgets the list. Clients notice and replace what they kept.
 - One shared list, with no sign-in.
 - Reloading while the device itself is offline needs a service worker, which this example doesn't have. The kept list covers a reload while only the server is unreachable.
+
+## License
+
+MIT
